@@ -7,7 +7,7 @@ from torch.optim import *
 device = 'cuda:0'
 
 if __name__ == '__main__':
-    model = WPLRLeNet5(10).to(device).to(torch.double)
+    model = WPLeNet5(10).to(device).to(torch.double)
     optim = Adam(model.parameters())
     trans = Compose([ToTensor(), (lambda x: x.to(device).to(torch.double))])
     rolling_acc = 0.1
