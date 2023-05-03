@@ -101,14 +101,12 @@ class WPLRLeNet5(torch.nn.Module):
             x, _x = modu(x, _x)
         return torch.argmax(x, dim=-1)
 
-def local_loss(posx, negx):
-    return (negx**2 - posx**2 + 1).log().mean()
-
-def force_reshape(x, shape):
-    if x.shape[0] >= shape[0]:
-        return x[:shape[0]]
-    else:
-        return torch.concat([x, x[torch.randint(0, x.shape[0], shape[0] - x.shape[0])]], dim=0)
+def local_loss(posx: torch.Tensor, negx: torch.Tensor):
+    posx = posx.reshape(posx.shape[0], -1)
+    posx = posx - posx.mean(dim=-1, keepdim=True)
+    negx = negx.reshape(negx.shape[0], -1)
+    negx = negx - negx.mean(dim=-1, keepdim=True)
+    return ((negx**2 - posx**2 + 1).relu() + 1e-12).log().mean().exp()
 
 class LocalMixerLeNet5(torch.nn.Module):
     def __init__(self, n_classes=10) -> None:
@@ -124,7 +122,7 @@ class LocalMixerLeNet5(torch.nn.Module):
             nn.AvgPool2d(2),
         )
         self.conv_3 = torch.nn.Sequential(
-            nn.Conv2d(in_channels=16, out_channels=120, kernel_size=5, stride=1),
+            nn.Conv2d(in_channels=16, out_channels=120, kernel_size=4, stride=1),
             nn.ReLU(),
             nn.Flatten(-3, -1)
         )
@@ -136,25 +134,26 @@ class LocalMixerLeNet5(torch.nn.Module):
             nn.Linear(in_features=84, out_features=n_classes),
             nn.LogSoftmax(dim=-1)
         )
-        self.last_x = torch.rand((1, 28, 28))
+        self.last_x = nn.Parameter(torch.rand((1, 1, 28, 28)))
 
-    def local_loss_descend(self, x, y):
+    def autograd_local_loss(self, x, y):
         px = x
-        nx = force_reshape(self.last_x, x.shape)
-        self.last_x = x
+        nx = torch.concat([self.last_x, x], dim=0)[torch.randperm(x.shape[0]+self.last_x.shape[0])][:x.shape[0]]
+        self.last_x = nn.Parameter(x)
         for layer in [self.conv_1, self.conv_2, self.conv_3, self.linr_4]:
-            ms = torch.rand_like(px)
+            ms = (torch.rand_like(px) >= 0.5) * 1.0
+            # FIXME: construct negative sample with local mixer policy as the one in Hinton's paper is. 
             local_loss(layer(px), layer(px*ms + nx*(1-ms))).backward()
             with torch.no_grad():
                 px = layer(px)
                 nx = layer(nx)
-        (-self.outp_5(px)[torch.arange(y.shape[0]), y]).backward()
+        (-self.outp_5(px)[torch.arange(y.shape[0]), y]).mean().backward()
 
     @torch.no_grad()
-    def forward(self, x):
+    def predict(self, x):
         x = self.conv_1(x)
         x = self.conv_2(x)
         x = self.conv_3(x)
         x = self.linr_4(x)
         x = self.outp_5(x)
-        return x
+        return x.argmax(dim=-1)
